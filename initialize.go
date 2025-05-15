@@ -1,6 +1,7 @@
 package niltoempty
 
 import (
+	"fmt"
 	"reflect"
 )
 
@@ -13,109 +14,121 @@ import (
 // Because pointer to element is usually used for modeling optional fields
 // nil pointers to the map or slices are left untouched.
 func Initialize(obj interface{}) interface{} {
+	fmt.Printf("Initialize called with type: %T\n", obj)
 	v := reflect.ValueOf(obj)
 	if v.Kind() != reflect.Ptr {
+		fmt.Printf("ERROR: Expected pointer, got %v\n", v.Kind())
 		panic("niltoempty: expected pointer")
 	}
+	fmt.Printf("Starting initialization of type: %v\n", v.Type())
 
 	initializeNils(v, map[uintptr]bool{})
+	fmt.Printf("Finished initialization of type: %v\n", v.Type())
 
 	return obj
 }
 
 func initializeNils(v reflect.Value, visited map[uintptr]bool) {
 	if checkVisited(v, visited) {
+		fmt.Printf("Already visited value of type: %v\n", v.Type())
 		return
 	}
 
-	// If we somehow received an invalid (zero) reflect.Value, abort early.
-	// This can happen when the value originated from an untyped nil stored
-	// inside an interface{} or map[*,interface{}].  Calling any method that
-	// introspects such a value (Kind, Type, Interface, etc.) would panic, so
-	// we must return immediately instead.
 	if !v.IsValid() {
+		fmt.Printf("WARNING: Invalid reflect.Value encountered\n")
 		return
 	}
+
+	fmt.Printf("Processing value of kind: %v, type: %v\n", v.Kind(), v.Type())
 
 	switch v.Kind() {
 	case reflect.Pointer:
+		fmt.Printf("Handling pointer type: %v\n", v.Type())
 		if !v.IsNil() {
+			fmt.Printf("Following non-nil pointer to: %v\n", v.Elem().Type())
 			initializeNils(v.Elem(), visited)
+		} else {
+			fmt.Printf("Skipping nil pointer\n")
 		}
 	case reflect.Slice:
-		// Initialize a nil slice.
+		fmt.Printf("Handling slice type: %v\n", v.Type())
 		if v.IsNil() {
+			fmt.Printf("Initializing nil slice of type: %v\n", v.Type())
 			v.Set(reflect.MakeSlice(v.Type(), 0, 0))
 			break
 		}
 
-		// Recursively iterate over slice items.
+		fmt.Printf("Processing %d slice elements\n", v.Len())
 		for i := 0; i < v.Len(); i++ {
 			item := v.Index(i)
+			fmt.Printf("Processing slice element %d of type: %v\n", i, item.Type())
 			initializeNils(item, visited)
 		}
 
 	case reflect.Map:
-		// Initialize a nil map.
+		fmt.Printf("Handling map type: %v\n", v.Type())
 		if v.IsNil() {
+			fmt.Printf("Initializing nil map of type: %v\n", v.Type())
 			v.Set(reflect.MakeMap(v.Type()))
 			break
 		}
 
-		// Recursively iterate over map items.
+		fmt.Printf("Processing map with %d entries\n", v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
+			key := iter.Key()
 			val := iter.Value()
+			fmt.Printf("Processing map entry with key: %v\n", key)
 
-			// If the value is invalid (untyped nil stored in interface{}), skip.
 			if !val.IsValid() {
+				fmt.Printf("WARNING: Invalid map value for key: %v\n", key)
 				continue
 			}
 
-			// Map element (value) can't be set directly; we need an addressable copy.
 			elemType := val.Type()
+			fmt.Printf("Creating addressable copy of map value type: %v\n", elemType)
 			subv := reflect.New(elemType).Elem()
-
-			// Copy its original value.
 			subv.Set(val)
-
-			// Replace nil slices and maps inside.
 			initializeNils(subv, visited)
-
-			// And set the replacement back in the map.
+			fmt.Printf("Setting processed value back into map for key: %v\n", key)
 			v.SetMapIndex(iter.Key(), subv)
 		}
 
 	case reflect.Interface:
-		// Dereference interface{}.
+		fmt.Printf("Handling interface type: %v\n", v.Type())
 		if v.IsNil() {
+			fmt.Printf("Skipping nil interface\n")
 			break
 		}
 
 		valueUnderInterface := reflect.ValueOf(v.Interface())
 		elemType := valueUnderInterface.Type()
+		fmt.Printf("Creating addressable copy of interface value type: %v\n", elemType)
 		subv := reflect.New(elemType).Elem()
 		subv.Set(valueUnderInterface)
 
 		initializeNils(subv, visited)
-
+		fmt.Printf("Setting processed value back into interface\n")
 		v.Set(subv)
 
-	// Recursively iterate over array elements.
 	case reflect.Array:
+		fmt.Printf("Handling array type: %v with length %d\n", v.Type(), v.Len())
 		for i := 0; i < v.Len(); i++ {
 			elem := v.Index(i)
+			fmt.Printf("Processing array element %d of type: %v\n", i, elem.Type())
 			initializeNils(elem, visited)
 		}
 
-	// Recursively iterate over struct fields.
 	case reflect.Struct:
+		fmt.Printf("Handling struct type: %v with %d fields\n", v.Type(), v.NumField())
 		for i := 0; i < v.NumField(); i++ {
 			field := v.Field(i)
+			fmt.Printf("Processing struct field %d (%s) of type: %v\n", i, v.Type().Field(i).Name, field.Type())
 			initializeNils(field, visited)
 		}
+	default:
+		fmt.Printf("Skipping unsupported kind: %v\n", v.Kind())
 	}
-
 }
 
 func checkVisited(v reflect.Value, visited map[uintptr]bool) bool {
@@ -130,6 +143,11 @@ func checkVisited(v reflect.Value, visited map[uintptr]bool) bool {
 		}
 		p := v.Pointer()
 		wasVisited := visited[p]
+		if wasVisited {
+			fmt.Printf("Found already visited pointer: %v\n", p)
+		} else {
+			fmt.Printf("Marking pointer as visited: %v\n", p)
+		}
 		visited[p] = true
 		return wasVisited
 	}
