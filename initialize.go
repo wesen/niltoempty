@@ -14,7 +14,14 @@ import (
 //
 // Because pointer to element is usually used for modeling optional fields
 // nil pointers to the map or slices are left untouched.
-func Initialize(obj interface{}) interface{} {
+func Initialize(obj interface{}) (result interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("ERROR: Panic in Initialize: %v\n", r)
+			result = obj
+		}
+	}()
+
 	fmt.Printf("Initialize called with type: %T (concrete type: %v)\n", obj, reflect.TypeOf(obj))
 	v := reflect.ValueOf(obj)
 	if v.Kind() != reflect.Ptr {
@@ -68,6 +75,10 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 		fmt.Printf("%sHandling slice at path '%s' type: %v (element type: %v)\n", prefix, path, v.Type(), v.Type().Elem())
 		if v.IsNil() {
 			fmt.Printf("%sInitializing nil slice at path '%s' of type: %v\n", prefix, path, v.Type())
+			if !v.CanSet() {
+				fmt.Printf("%sWARNING: Cannot set nil slice at path '%s' because it's not settable (type: %v)\n", prefix, path, v.Type())
+				break
+			}
 			v.Set(reflect.MakeSlice(v.Type(), 0, 0))
 			break
 		}
@@ -84,6 +95,10 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 		fmt.Printf("%sHandling map at path '%s' type: %v (key: %v, value: %v)\n", prefix, path, v.Type(), v.Type().Key(), v.Type().Elem())
 		if v.IsNil() {
 			fmt.Printf("%sInitializing nil map at path '%s' of type: %v\n", prefix, path, v.Type())
+			if !v.CanSet() {
+				fmt.Printf("%sWARNING: Cannot set nil map at path '%s' because it's not settable (type: %v)\n", prefix, path, v.Type())
+				break
+			}
 			v.Set(reflect.MakeMap(v.Type()))
 			break
 		}
@@ -107,6 +122,12 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 			subv := reflect.New(elemType).Elem()
 			subv.Set(val)
 			initializeNils(subv, visited, mapItemPath, depth+1)
+
+			if !v.CanSet() {
+				fmt.Printf("%sWARNING: Cannot set map index for key '%v' at path '%s' because map is not settable (type: %v)\n", prefix, keyStr, path, v.Type())
+				fmt.Printf("%sSkipping update for map entry at path '%s' because map is not settable\n", prefix, mapItemPath)
+				continue
+			}
 			fmt.Printf("%sSetting processed value back into map at path '%s' for key: %v\n", prefix, mapItemPath, key)
 			v.SetMapIndex(iter.Key(), subv)
 		}
@@ -125,6 +146,10 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 		subv.Set(valueUnderInterface)
 
 		initializeNils(subv, visited, path, depth+1)
+		if !v.CanSet() {
+			fmt.Printf("%sWARNING: Cannot set interface value at path '%s' because it's not settable (type: %v)\n", prefix, path, v.Type())
+			break
+		}
 		fmt.Printf("%sSetting processed value back into interface at path '%s'\n", prefix, path)
 		v.Set(subv)
 
@@ -133,6 +158,11 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 		for i := 0; i < v.Len(); i++ {
 			elem := v.Index(i)
 			arrayItemPath := fmt.Sprintf("%s[%d]", path, i)
+			if !elem.CanSet() {
+				fmt.Printf("%sWARNING: Skipping non-settable array element at path '%s' (type: %v)\n",
+					prefix, arrayItemPath, elem.Type())
+				continue
+			}
 			fmt.Printf("%sProcessing array element at path '%s' of type: %v\n", prefix, arrayItemPath, elem.Type())
 			initializeNils(elem, visited, arrayItemPath, depth+1)
 		}
@@ -143,9 +173,20 @@ func initializeNils(v reflect.Value, visited map[uintptr]bool, path string, dept
 			field := v.Field(i)
 			fieldType := v.Type().Field(i)
 			fieldPath := getFieldPath(path, fieldType.Name)
-			fmt.Printf("%sProcessing struct field at path '%s' name: '%s' type: %v tags: '%v'\n",
-				prefix, fieldPath, fieldType.Name, field.Type(), fieldType.Tag)
-			initializeNils(field, visited, fieldPath, depth+1)
+
+			if fieldType.IsExported() {
+				if !field.CanSet() {
+					fmt.Printf("%sWARNING: Skipping exported but non-settable struct field at path '%s' (name: '%s', type: %v)\n",
+						prefix, fieldPath, fieldType.Name, field.Type())
+					continue
+				}
+				fmt.Printf("%sProcessing struct field at path '%s' name: '%s' type: %v tags: '%v'\n",
+					prefix, fieldPath, fieldType.Name, field.Type(), fieldType.Tag)
+				initializeNils(field, visited, fieldPath, depth+1)
+			} else {
+				// fmt.Printf("%sSkipping unexported struct field at path '%s' name: '%s' type: %v\n",
+				//	prefix, fieldPath, fieldType.Name, field.Type())
+			}
 		}
 	default:
 		fmt.Printf("%sSkipping unsupported kind at path '%s': %v\n", prefix, path, v.Kind())
